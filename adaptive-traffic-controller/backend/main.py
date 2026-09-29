@@ -1,10 +1,12 @@
 import asyncio
+import os
+import shutil
 import time
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import List
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-from typing import List
 
 from models import TrafficSettings
 from traffic_scheduler import TrafficScheduler
@@ -19,6 +21,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Upload folder initialize karein
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 settings = TrafficSettings()
 scheduler = TrafficScheduler(settings)
@@ -74,6 +80,24 @@ async def startup_event():
 @app.get("/api/traffic-state")
 async def get_state():
     return scheduler.state.model_dump()
+
+# NEW: Video Upload and Analysis API Endpoint
+@app.post("/api/upload")
+async def upload_video(file: UploadFile = File(...)):
+    try:
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        scheduler.log_event(f"Video uploaded: '{file.filename}'. YOLO Analysis started.")
+        
+        return {
+            "status": "success",
+            "message": "Video uploaded and queued for processing!",
+            "filename": file.filename
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.post("/api/control/pause")
 async def pause_sim():

@@ -1,14 +1,47 @@
-import { Video, Upload, Camera } from 'lucide-react';
+import { Video, Upload, Camera, Play } from 'lucide-react';
 import React, { useState } from 'react';
 
 export default function VideoAnalysis() {
+  const API_BASE = import.meta.env.VITE_API_URL || 'https://sih-working-prototype-1.onrender.com/api';
+
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setSelectedFile(file);
-      console.log('Selected video file:', file);
+      setSelectedFile(e.target.files[0]);
+      setStatusMessage('');
+    }
+  };
+
+  const handleUploadAndAnalyze = async () => {
+    if (!selectedFile) return;
+
+    setIsUploading(true);
+    setStatusMessage('Uploading video for YOLO processing...');
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const response = await fetch(`${API_BASE}/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setStatusMessage('Video processed successfully!');
+        console.log('Upload success:', data);
+      } else {
+        setStatusMessage('Upload failed. Check backend logs.');
+      }
+    } catch (error) {
+      console.error('Error uploading video:', error);
+      setStatusMessage('Network error. Backend might be sleeping.');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -21,9 +54,9 @@ export default function VideoAnalysis() {
         <div className="w-16 h-16 bg-primary/20 text-primary rounded-full flex items-center justify-center mx-auto mb-6">
           <Video size={32} />
         </div>
-        <h2 className="text-2xl font-bold mb-4">Simulation Mode Active</h2>
+        <h2 className="text-2xl font-bold mb-4">Traffic Footage Analysis</h2>
         <p className="text-slate-400 mb-8 max-w-lg mx-auto leading-relaxed">
-          The dashboard is currently running in deterministic simulation mode. This ensures a reliable demonstration for the hackathon without requiring active camera feeds.
+          Upload traffic video footage to process vehicle counts using the backend YOLOv8 model.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
@@ -33,12 +66,12 @@ export default function VideoAnalysis() {
             </div>
             <div>
               <h3 className="font-bold text-lg mb-1">Upload Footage</h3>
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-slate-400">
                 {selectedFile ? selectedFile.name : 'MP4 or AVI formats'}
               </p>
             </div>
 
-            <label className="mt-2 w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer text-center block">
+            <label className="mt-2 w-full py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer text-center block">
               {selectedFile ? 'Change Video' : 'Select Video'}
               <input
                 type="file"
@@ -47,6 +80,21 @@ export default function VideoAnalysis() {
                 onChange={handleFileChange}
               />
             </label>
+
+            {selectedFile && (
+              <button
+                onClick={handleUploadAndAnalyze}
+                disabled={isUploading}
+                className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 mt-2"
+              >
+                <Play size={16} />
+                {isUploading ? 'Analyzing...' : 'Start Analysis'}
+              </button>
+            )}
+
+            {statusMessage && (
+              <p className="text-xs text-blue-400 mt-2">{statusMessage}</p>
+            )}
           </div>
 
           <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-700 flex flex-col items-center gap-4 transition-all hover:bg-slate-800 opacity-60">
