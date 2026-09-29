@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "adaptive-traffic-controller/frontend/dist",
+  "framework": "vite",
+  "rootDirectory": "adaptive-traffic-controller/frontend",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
