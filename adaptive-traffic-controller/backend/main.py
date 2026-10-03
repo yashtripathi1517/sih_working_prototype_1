@@ -160,94 +160,118 @@
 
 # if __name__ == "__main__":
 #     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
 import os
+import shutil
 import cv2
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 
 app = FastAPI()
 
+# 1. CORS Configuration for cross-origin requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load lightweight YOLOv8 Nano model
+# 2. Health check endpoint (Prevents 404 on root domain)
+@app.get("/")
+def home():
+    return {"status": "SIH Traffic Analysis API is running"}
+
+# 3. Load lightweight YOLOv8 Nano model
 model = YOLO("yolov8n.pt")
 
-# Vehicle class IDs in COCO dataset
-VEHICLE_CLASSES = [2, 3, 5, 7]  # 2: car, 3: motorcycle, 5: bus, 7: truck
+# Vehicle class IDs in COCO dataset (2: car, 3: motorcycle, 5: bus, 7: truck)
+VEHICLE_CLASSES = [2, 3, 5, 7]
 
 @app.post("/api/upload")
 async def analyze_video(file: UploadFile = File(...)):
-    # Save uploaded video temporarily
     temp_path = f"temp_{file.filename}"
-    with open(temp_path, "wb") as f:
-        f.write(await file.read())
-
-    cap = cv2.VideoCapture(temp_path)
     
-    max_vehicles_detected = 0
-    cars, bikes, heavies = 0, 0, 0
-    frame_count = 0
+    try:
+        # Save uploaded video in chunks (Prevents Render 512MB RAM OOM Crash)
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-    # Process every 10th frame for fast performance
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+        cap = cv2.VideoCapture(temp_path)
+        if not cap.isOpened():
+            raise HTTPException(status_code=400, detail="Could not open video file.")
 
-        frame_count += 1
-        if frame_count % 10 != 0:
-            continue
+        max_vehicles_detected = 0
+        cars, bikes, heavies = 0, 0, 0
+        frame_count = 0
+        processed_frames = 0
+        MAX_PROCESSED_FRAMES = 30  # Safety limit to prevent Render HTTP timeout (Max ~10-15 seconds)
 
-        results = model(frame, verbose=False)[0]
-        
-        current_cars, current_bikes, current_heavies = 0, 0, 0
-        for box in results.boxes:
-            cls_id = int(box.cls[0])
-            if cls_id == 2:
-                current_cars += 1
-            elif cls_id == 3:
-                current_bikes += 1
-            elif cls_id in [5, 7]:
-                current_heavies += 1
+        while cap.isOpened() and processed_frames < MAX_PROCESSED_FRAMES:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        total_current = current_cars + current_bikes + current_heavies
-        
-        # Track max vehicle density frame
-        if total_current > max_vehicles_detected:
-            max_vehicles_detected = total_current
-            cars = current_cars
-            bikes = current_bikes
-            heavies = current_heavies
+            frame_count += 1
+            # Process every 15th frame for faster CPU performance on Render
+            if frame_count % 15 != 0:
+                continue
 
-    cap.release()
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
+            processed_frames += 1
 
-    # Calculate Density and Recommended Green Light Time
-    density_percent = min(100, int((max_vehicles_detected / 30) * 100))
-    if density_percent > 70:
-        density_label = f"High Density ({density_percent}%)"
-        green_time = f"{min(60, 20 + max_vehicles_detected * 1)} Seconds"
-    elif density_percent > 35:
-        density_label = f"Medium Density ({density_percent}%)"
-        green_time = f"{15 + max_vehicles_detected * 1} Seconds"
-    else:
-        density_label = f"Low Density ({density_percent}%)"
-        green_time = "15 Seconds"
+            # Run YOLOv8 inference
+            results = model(frame, verbose=False)[0]
+            
+            current_cars, current_bikes, current_heavies = 0, 0, 0
+            for box in results.boxes:
+                cls_id = int(box.cls[0])
+                if cls_id == 2:
+                    current_cars += 1
+                elif cls_id == 3:
+                    current_bikes += 1
+                elif cls_id in [5, 7]:
+                    current_heavies += 1
 
-    return {
-        "filename": file.filename,
-        "totalVehicles": max_vehicles_detected,
-        "cars": cars,
-        "bikes": bikes,
-        "trucksBuses": heavies,
-        "density": density_label,
-        "recommendedGreenTime": green_time
-    }
+            total_current = current_cars + current_bikes + current_heavies
+            
+            # Track maximum vehicle density frame
+            if total_current > max_vehicles_detected:
+                max_vehicles_detected = total_current
+                cars = current_cars
+                bikes = current_bikes
+                heavies = current_heavies
+
+        cap.release()
+
+        # Calculate Density and Recommended Green Light Time
+        density_percent = min(100, int((max_vehicles_detected / 30) * 100))
+        if density_percent > 70:
+            density_label = f"High Density ({density_percent}%)"
+            green_time = f"{min(60, 20 + max_vehicles_detected * 1)} Seconds"
+        elif density_percent > 35:
+            density_label = f"Medium Density ({density_percent}%)"
+            green_time = f"{15 + max_vehicles_detected * 1} Seconds"
+        else:
+            density_label = f"Low Density ({density_percent}%)"
+            green_time = "15 Seconds"
+
+        return {
+            "filename": file.filename,
+            "totalVehicles": max_vehicles_detected,
+            "cars": cars,
+            "bikes": bikes,
+            "trucksBuses": heavies,
+            "density": density_label,
+            "recommendedGreenTime": green_time
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
+    finally:
+        # Guarantee cleanup of temporary video file even if process fails
+        if 'cap' in locals() and cap.isOpened():
+            cap.release()
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
